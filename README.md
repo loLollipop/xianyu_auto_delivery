@@ -99,3 +99,23 @@ xianyu-auto-delivery
 ```bash
 python -m pytest
 ```
+
+
+## 部署到 claw.cloud
+
+已提供部署文件：
+
+- `Dockerfile`
+- `.dockerignore`
+- `.env.example`
+- `CLAW_CLOUD_DEPLOY.md`
+- `scripts/xianyu_deliver.py`（占位脚本，需替换为你的真实自动化逻辑）
+
+快速步骤：
+
+1. 在 claw.cloud 创建长期运行服务并挂载持久卷到 `/app/data`。
+2. 配置 `.env.example` 中的环境变量，特别是 `DELIVERY_COMMAND`。
+3. 准备 `/app/data/orders.json`、`/app/data/product_mapping.json` 并导入卡密。
+4. 启动命令使用默认 `xianyu-auto-delivery`；排查时可用 `xianyu-auto-delivery --once`。
+
+详细步骤见：`CLAW_CLOUD_DEPLOY.md`。
