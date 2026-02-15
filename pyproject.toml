@@ -1,0 +1,25 @@
+[project]
+name = "xianyu-auto-delivery"
+version = "0.1.0"
+description = "闲鱼自动发货：订单抓取 + 卡密分发"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31.0"
+]
+
+[project.scripts]
+xianyu-auto-delivery = "xianyu_auto_delivery.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
