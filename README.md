@@ -1,88 +1,101 @@
 # xianyu_auto_delivery
 
-一个将 **闲鱼订单抓取自动化** 与 **卡密库存管理** 结合的自动发货项目。
+这是一个只做 **闲鱼自动发货** 的项目：
 
-> 设计目标：参考 `Kylsky/chatgpt-team-helper` 的订单抓取与发货能力，融合 `loLollipop/xianyu_card` 的卡密管理思路，形成“订单 -> 卡密分配 -> 自动回传闲鱼”的闭环。
+- 抓取“已支付、待发货”订单（不包含 team 账号管理）。
+- 根据商品标题自动匹配卡池。
+- 从本地卡密库提取对应卡密。
+- 自动发送卡密并执行“点击发货”。
 
-## 功能特性
+## 核心设计（无 team-helper API 依赖）
 
-- 对接上游订单源（默认：`chatgpt-team-helper` 暴露的 pending 订单接口）。
-- 本地 SQLite 卡密仓库：导入卡密、按商品名分配、失败回滚。
-- 自动发货：将分配出的卡密拼接为发货消息，回调闲鱼发货接口。
-- 幂等保障：已发货订单写入 `delivery_logs`，避免重复发货。
+1. `JsonOrderProvider`：读取你抓单脚本写入的 `orders.json`。
+2. `ProductMatcher`：按关键字把商品标题映射到卡池 `product_key`。
+3. `CardStore`：本地 SQLite 管理卡密库存（导入、分配、失败回滚、发货幂等）。
+4. `CommandDeliveryClient`：调用你的浏览器自动化脚本，把卡密发送给买家并点击发货。
 
 ## 项目结构
 
 ```text
 src/xianyu_auto_delivery/
-  config.py          # 环境变量配置
-  models.py          # 订单/卡密模型
-  order_provider.py  # 订单抓取抽象 + chatgpt-team-helper 适配
-  card_store.py      # 卡密库存与发货日志
-  delivery_client.py # 发货动作抽象 + 闲鱼发货适配
-  service.py         # 编排核心逻辑
-  main.py            # CLI 入口
+  config.py
+  models.py
+  order_provider.py    # 已支付订单读取 + 标记已发货
+  product_matcher.py   # 商品标题 -> 卡池映射
+  card_store.py        # 卡密库存管理（SQLite）
+  delivery_client.py   # 调用外部自动化命令发货
+  service.py           # 自动发货编排
+  main.py
 ```
 
-## 安装
+## 准备数据
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+### 1) 订单文件 `orders.json`
+
+由你自己的抓单程序持续更新，例如：
+
+```json
+[
+  {
+    "order_id": "12345",
+    "item_title": "GPT Plus 月卡",
+    "buyer_nick": "buyer_a",
+    "quantity": 1,
+    "paid": true,
+    "delivered": false
+  }
+]
+```
+
+### 2) 商品映射 `product_mapping.json`
+
+key 是标题关键字，value 是卡池名：
+
+```json
+{
+  "gpt": "GPT",
+  "claude": "CLAUDE"
+}
+```
+
+### 3) 卡密导入
+
+```python
+from xianyu_auto_delivery.card_store import CardStore
+
+store = CardStore("./data/cards.db")
+store.import_cards_from_file("GPT", "./cards_gpt.txt")
 ```
 
 ## 环境变量
 
 | 变量名 | 说明 |
 |---|---|
-| `HELPER_API_BASE` | 订单抓取服务地址（如 chatgpt-team-helper API） |
-| `HELPER_API_TOKEN` | 订单抓取服务 Token |
-| `XIANYU_DELIVERY_API_BASE` | 闲鱼发货服务地址 |
-| `XIANYU_DELIVERY_TOKEN` | 闲鱼发货服务 Token |
-| `SQLITE_PATH` | 本地卡密数据库路径，默认 `./data/cards.db` |
-| `POLL_INTERVAL_SECONDS` | 轮询间隔秒数，默认 `15` |
+| `SQLITE_PATH` | 卡密数据库路径，默认 `./data/cards.db` |
+| `ORDERS_JSON_PATH` | 订单文件路径，默认 `./data/orders.json` |
+| `PRODUCT_MAPPING_PATH` | 商品映射文件路径，默认 `./data/product_mapping.json` |
+| `DELIVERY_COMMAND` | 实际执行发货点击的命令模板（必须） |
+| `POLL_INTERVAL_SECONDS` | 轮询秒数，默认 `15` |
 
-## 卡密导入示例
+`DELIVERY_COMMAND` 支持变量：`{order_id}`、`{message}`。
 
-可以直接复用 `CardStore.import_cards_from_file`，每行一条卡密：
+示例：
 
-```python
-from xianyu_auto_delivery.card_store import CardStore
-
-store = CardStore("./data/cards.db")
-count = store.import_cards_from_file("GPT会员", "./cards.txt")
-print("imported", count)
+```bash
+export DELIVERY_COMMAND='python scripts/xianyu_deliver.py --order-id {order_id} --message {message}'
 ```
+
+> 你只需要把 `scripts/xianyu_deliver.py` 替换成你现有的闲鱼页面自动化脚本（例如 Playwright/Selenium），这个项目就会把订单和卡密拼好后调用它自动点击发货。
 
 ## 运行
 
-只跑一轮：
-
 ```bash
 xianyu-auto-delivery --once
-```
-
-持续轮询：
-
-```bash
 xianyu-auto-delivery
 ```
-
-## 可扩展建议（创新点）
-
-1. **商品映射规则**：增加“商品标题 -> 卡池名”的模糊映射，提升实际订单匹配率。
-2. **分布式锁/多实例协同**：避免多实例抢同一批卡密。
-3. **风控策略**：对高频订单或异常买家加人工审核队列。
-4. **可观测性**：接入 Prometheus 指标与告警（库存低水位、发货失败率）。
-5. **管理后台**：补充简单 Web 控制台，查看库存、订单与发货日志。
 
 ## 测试
 
 ```bash
-pytest
+python -m pytest
 ```
-
-## 合规提示
-
-请确保你的自动化流程符合闲鱼平台规则、商品合规要求及当地法律法规。

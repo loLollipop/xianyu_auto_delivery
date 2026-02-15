@@ -3,8 +3,9 @@
 __all__ = [
     "config",
     "models",
-    "card_store",
     "order_provider",
+    "card_store",
+    "product_matcher",
     "delivery_client",
     "service",
 ]

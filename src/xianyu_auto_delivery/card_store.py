@@ -6,11 +6,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from .models import Card
+from .models import CardCode
 
 
 class CardStore:
-    """从 xianyu_card 的思路抽象出的卡密仓储（SQLite 版）。"""
+    """参考 xianyu_card 的本地卡密库存能力。"""
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -33,7 +33,7 @@ class CardStore:
                 """
                 CREATE TABLE IF NOT EXISTS cards (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    product_name TEXT NOT NULL,
+                    product_key TEXT NOT NULL,
                     card_code TEXT NOT NULL UNIQUE,
                     is_used INTEGER NOT NULL DEFAULT 0,
                     used_by_order_id TEXT,
@@ -44,72 +44,52 @@ class CardStore:
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS delivery_logs (
+                CREATE TABLE IF NOT EXISTS delivered_orders (
                     order_id TEXT PRIMARY KEY,
-                    delivered_at TEXT NOT NULL,
-                    card_count INTEGER NOT NULL,
-                    delivery_message TEXT NOT NULL
+                    delivered_at TEXT NOT NULL
                 )
                 """
             )
 
-    def import_cards_from_file(self, product_name: str, file_path: str) -> int:
-        inserted = 0
+    def import_cards_from_file(self, product_key: str, file_path: str) -> int:
         now = datetime.utcnow().isoformat()
-        with open(file_path, "r", encoding="utf-8") as f, self._conn() as conn:
-            for raw in f:
+        inserted = 0
+        with open(file_path, "r", encoding="utf-8") as file, self._conn() as conn:
+            for raw in file:
                 code = raw.strip()
                 if not code:
                     continue
                 cur = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO cards(product_name, card_code, created_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (product_name, code, now),
+                    "INSERT OR IGNORE INTO cards(product_key, card_code, created_at) VALUES (?, ?, ?)",
+                    (product_key, code, now),
                 )
                 inserted += cur.rowcount
         return inserted
 
-    def allocate_cards(self, product_name: str, order_id: str, quantity: int) -> list[Card]:
+    def allocate_cards(self, product_key: str, order_id: str, quantity: int) -> list[CardCode]:
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                SELECT id, product_name, card_code, created_at
-                FROM cards
-                WHERE product_name = ? AND is_used = 0
-                ORDER BY id ASC
-                LIMIT ?
+                SELECT id, card_code FROM cards
+                WHERE product_key = ? AND is_used = 0
+                ORDER BY id ASC LIMIT ?
                 """,
-                (product_name, quantity),
+                (product_key, quantity),
             ).fetchall()
             if len(rows) < quantity:
                 return []
 
-            cards = [
-                Card(
-                    card_id=int(row["id"]),
-                    product_name=str(row["product_name"]),
-                    card_code=str(row["card_code"]),
-                    created_at=datetime.fromisoformat(str(row["created_at"])),
-                )
-                for row in rows
-            ]
-
+            ids = [int(row["id"]) for row in rows]
             now = datetime.utcnow().isoformat()
             conn.executemany(
-                """
-                UPDATE cards
-                SET is_used = 1, used_by_order_id = ?, used_at = ?
-                WHERE id = ?
-                """,
-                [(order_id, now, c.card_id) for c in cards],
+                "UPDATE cards SET is_used = 1, used_by_order_id = ?, used_at = ? WHERE id = ?",
+                [(order_id, now, card_id) for card_id in ids],
             )
-            return cards
+            return [CardCode(code=str(row["card_code"])) for row in rows]
 
-    def rollback_cards(self, order_id: str) -> int:
+    def rollback_cards(self, order_id: str) -> None:
         with self._conn() as conn:
-            cur = conn.execute(
+            conn.execute(
                 """
                 UPDATE cards
                 SET is_used = 0, used_by_order_id = NULL, used_at = NULL
@@ -117,22 +97,15 @@ class CardStore:
                 """,
                 (order_id,),
             )
-            return cur.rowcount
 
-    def is_order_delivered(self, order_id: str) -> bool:
+    def is_delivered(self, order_id: str) -> bool:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM delivery_logs WHERE order_id = ?",
-                (order_id,),
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM delivered_orders WHERE order_id = ?", (order_id,)).fetchone()
             return row is not None
 
-    def mark_delivered(self, order_id: str, card_count: int, message: str) -> None:
+    def mark_delivered(self, order_id: str) -> None:
         with self._conn() as conn:
             conn.execute(
-                """
-                INSERT OR REPLACE INTO delivery_logs(order_id, delivered_at, card_count, delivery_message)
-                VALUES (?, ?, ?, ?)
-                """,
-                (order_id, datetime.utcnow().isoformat(), card_count, message),
+                "INSERT OR REPLACE INTO delivered_orders(order_id, delivered_at) VALUES (?, ?)",
+                (order_id, datetime.utcnow().isoformat()),
             )

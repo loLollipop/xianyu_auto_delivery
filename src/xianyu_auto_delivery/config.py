@@ -6,37 +6,28 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class Settings:
-    """运行配置。
+    """仅保留自动发货闭环配置，不依赖 team-helper API。"""
 
-    通过环境变量读取，便于容器化部署。
-    """
-
-    helper_api_base: str
-    helper_api_token: str
-    xianyu_delivery_api_base: str
-    xianyu_delivery_token: str
-    sqlite_path: str = "./data/cards.db"
+    sqlite_path: str
+    orders_json_path: str
+    product_mapping_path: str
+    delivery_command: str
     poll_interval_seconds: int = 15
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
-            helper_api_base=os.environ.get("HELPER_API_BASE", "").rstrip("/"),
-            helper_api_token=os.environ.get("HELPER_API_TOKEN", ""),
-            xianyu_delivery_api_base=os.environ.get("XIANYU_DELIVERY_API_BASE", "").rstrip("/"),
-            xianyu_delivery_token=os.environ.get("XIANYU_DELIVERY_TOKEN", ""),
             sqlite_path=os.environ.get("SQLITE_PATH", "./data/cards.db"),
+            orders_json_path=os.environ.get("ORDERS_JSON_PATH", "./data/orders.json"),
+            product_mapping_path=os.environ.get("PRODUCT_MAPPING_PATH", "./data/product_mapping.json"),
+            delivery_command=os.environ.get("DELIVERY_COMMAND", ""),
             poll_interval_seconds=int(os.environ.get("POLL_INTERVAL_SECONDS", "15")),
         )
 
     def validate(self) -> None:
         required = {
-            "HELPER_API_BASE": self.helper_api_base,
-            "HELPER_API_TOKEN": self.helper_api_token,
-            "XIANYU_DELIVERY_API_BASE": self.xianyu_delivery_api_base,
-            "XIANYU_DELIVERY_TOKEN": self.xianyu_delivery_token,
+            "DELIVERY_COMMAND": self.delivery_command,
         }
         missing = [key for key, value in required.items() if not value]
         if missing:
-            joined = ", ".join(missing)
-            raise ValueError(f"缺少必要环境变量: {joined}")
+            raise ValueError(f"缺少必要环境变量: {', '.join(missing)}")

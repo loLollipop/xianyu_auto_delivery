@@ -2,48 +2,63 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import json
-from urllib import request
+from pathlib import Path
 
 from .models import Order
 
 
 class OrderProvider(ABC):
-    """订单来源抽象层。"""
+    @abstractmethod
+    def fetch_paid_pending_orders(self) -> list[Order]:
+        raise NotImplementedError
 
     @abstractmethod
-    def fetch_pending_orders(self) -> list[Order]:
+    def mark_delivered(self, order_id: str) -> None:
         raise NotImplementedError
 
 
-class ChatGPTTeamHelperOrderProvider(OrderProvider):
-    """对接 chatgpt-team-helper 的订单抓取接口。"""
+class JsonOrderProvider(OrderProvider):
+    """从本地 JSON 读取闲鱼订单（可由你的抓单脚本实时刷新）。"""
 
-    def __init__(self, base_url: str, token: str, timeout: int = 15) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+    def __init__(self, orders_json_path: str) -> None:
+        self.orders_json_path = orders_json_path
+        Path(orders_json_path).parent.mkdir(parents=True, exist_ok=True)
+        if not Path(orders_json_path).exists():
+            Path(orders_json_path).write_text("[]", encoding="utf-8")
 
-    def fetch_pending_orders(self) -> list[Order]:
-        req = request.Request(
-            f"{self.base_url}/api/xianyu/orders/pending",
-            headers=self.headers,
-            method="GET",
-        )
-        with request.urlopen(req, timeout=self.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+    def _read(self) -> list[dict]:
+        with open(self.orders_json_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        if not isinstance(data, list):
+            raise ValueError("orders.json 必须是数组")
+        return data
 
+    def _write(self, rows: list[dict]) -> None:
+        with open(self.orders_json_path, "w", encoding="utf-8") as file:
+            json.dump(rows, file, ensure_ascii=False, indent=2)
+
+    def fetch_paid_pending_orders(self) -> list[Order]:
+        rows = self._read()
         orders: list[Order] = []
-        for row in payload.get("orders", []):
+        for row in rows:
+            paid = bool(row.get("paid", False))
+            delivered = bool(row.get("delivered", False))
+            if not paid or delivered:
+                continue
             orders.append(
                 Order(
                     order_id=str(row["order_id"]),
                     item_title=str(row["item_title"]),
-                    buyer_nick=str(row.get("buyer_nick", "未知买家")),
+                    buyer_nick=str(row.get("buyer_nick", "买家")),
                     quantity=max(int(row.get("quantity", 1)), 1),
-                    status=str(row.get("status", "pending")),
+                    paid=True,
                 )
             )
         return orders
+
+    def mark_delivered(self, order_id: str) -> None:
+        rows = self._read()
+        for row in rows:
+            if str(row.get("order_id")) == order_id:
+                row["delivered"] = True
+        self._write(rows)

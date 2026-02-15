@@ -1,35 +1,33 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-import json
-from urllib import request
+import shlex
+import subprocess
 
 
 class DeliveryClient(ABC):
-    """发货动作抽象层。"""
+    """发货动作抽象：最终应自动把卡密发送给买家并点击发货。"""
 
     @abstractmethod
     def deliver_card_codes(self, order_id: str, message: str) -> None:
         raise NotImplementedError
 
 
-class XianyuDeliveryClient(DeliveryClient):
-    """对接 chatgpt-team-helper 中的闲鱼自动发货接口。"""
+class CommandDeliveryClient(DeliveryClient):
+    """通过命令行调用浏览器自动化脚本执行“发送卡密并点击发货”。
 
-    def __init__(self, base_url: str, token: str, timeout: int = 15) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+    DELIVERY_COMMAND 示例：
+    python scripts/xianyu_deliver.py --order-id "{order_id}" --message "{message}"
+    """
+
+    def __init__(self, command_template: str) -> None:
+        self.command_template = command_template
 
     def deliver_card_codes(self, order_id: str, message: str) -> None:
-        req = request.Request(
-            f"{self.base_url}/api/xianyu/orders/{order_id}/deliver",
-            headers=self.headers,
-            data=json.dumps({"message": message}).encode("utf-8"),
-            method="POST",
+        command = self.command_template.format(
+            order_id=order_id,
+            message=message.replace('"', '\\"'),
         )
-        with request.urlopen(req, timeout=self.timeout):
-            return
+        completed = subprocess.run(shlex.split(command), check=False, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise RuntimeError(f"发货命令执行失败: {completed.stderr.strip()}")
